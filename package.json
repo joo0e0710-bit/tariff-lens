@@ -1,0 +1,9 @@
+{
+  "name": "customs-fta-comparator-standalone",
+  "version": "1.0.0",
+  "private": true,
+  "description": "수출입 관세 & FTA 실효세율 비교기 Node.js 로컬 웹 서버",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

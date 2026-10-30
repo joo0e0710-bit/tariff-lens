@@ -1,0 +1,2243 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TariffLens - HS코드 관세 &amp; FTA 실효세율 비교기</title>
+  <meta
+    name="description"
+    content="HS코드 기반 기본세율(A)·WTO 양허세율(C)·주요 FTA 협정세율(F) 비교 및 수입 관세·부가가치세 절감 시뮬레이터"
+  />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="TariffLens - HS코드 관세 & FTA 실효세율 비교기" />
+  <meta
+    property="og:description"
+    content="품목별 기본세율(A)·양허세율(C)·FTA 협정세율 비교 및 관세 절감 시뮬레이션"
+  />
+  <link
+    rel="icon"
+    type="image/svg+xml"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23ffffff' stroke-width='2'/%3E%3Cpath d='M7 16h18M16 7a14 14 0 0 1 0 18M16 7a14 14 0 0 0 0 18' fill='none' stroke='%236ee7b7' stroke-width='1.8'/%3E%3C/svg%3E"
+  />
+
+  <!-- Pretendard 웹폰트 -->
+  <link
+    rel="stylesheet"
+    as="style"
+    crossorigin
+    href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+  />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: [
+              '"Pretendard Variable"',
+              'Pretendard',
+              '-apple-system',
+              'BlinkMacSystemFont',
+              'system-ui',
+              '"Noto Sans KR"',
+              '"Malgun Gothic"',
+              'sans-serif',
+            ],
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    /* 커스텀 레인지 슬라이더 스타일 */
+    input[type='range'].tariff-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 8px;
+      border-radius: 9999px;
+      outline: none;
+    }
+    input[type='range'].tariff-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 9999px;
+      background: #4f46e5;
+      border: 3px solid #ffffff;
+      box-shadow: 0 2px 6px rgba(79, 70, 229, 0.45);
+      cursor: pointer;
+      transition: transform 0.15s ease;
+    }
+    input[type='range'].tariff-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.12);
+    }
+    input[type='range'].tariff-slider::-moz-range-thumb {
+      width: 20px;
+      height: 20px;
+      border-radius: 9999px;
+      background: #4f46e5;
+      border: 3px solid #ffffff;
+      box-shadow: 0 2px 6px rgba(79, 70, 229, 0.45);
+      cursor: pointer;
+    }
+  </style>
+
+  <!-- React 18 & ReactDOM 18 CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Babel Standalone CDN -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans antialiased selection:bg-indigo-600 selection:text-white">
+  <div id="root"></div>
+
+  <script id="app-tsx" type="text/plain">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // ============================================================================
+    // 1. Types & Sample Schema (수출입 관세 & FTA 데이터 규격)
+    // ============================================================================
+    interface TariffRate {
+      code: string;        // 'A', 'C', 'FUS', 'FEU', 'FCN', 'FRC', 'FVK' 등
+      name: string;        // '기본관세', 'WTO양허', '한-미 FTA', '한-EU FTA' 등
+      rate: number;        // 세율 (백분율, 예: 8.0)
+      type: 'base' | 'wto' | 'fta';
+      requiresCO: boolean; // 원산지증명서 필수 여부 (FTA는 true)
+      notes?: string;      // 비고 (예: "직접운송원칙 충족 필요")
+    }
+
+    interface ItemTariffInfo {
+      hsCode: string;             // 10자리 HS코드 (예: "0901.21.0000")
+      itemNameKo: string;         // 한글 품목명
+      itemNameEn: string;         // 영문 품목명
+      unit: string;               // 수량 단위 (kg, 개, 병, 대 등)
+      tariffs: TariffRate[];      // 적용 가능한 세율 목록
+      tagLabel?: string;          // 추천 검색 해시태그명 (예: "볶은커피")
+      category?: string;          // 품목군 분류
+      originRuleSummary?: string; // 원산지 결정기준 요약
+    }
+
+    type CurrencyCode = 'KRW' | 'USD' | 'EUR' | 'CNY' | 'JPY' | 'VND';
+
+    interface CurrencyOption {
+      code: CurrencyCode;
+      label: string;
+      symbol: string;
+      defaultExchangeRate: number;
+    }
+
+    interface OptimalRateAnalysis {
+      optimalTariff: TariffRate;
+      nonFtaEffectiveTariff: TariffRate;
+      baseTariff: TariffRate;
+      tiedOptimalTariffs: TariffRate[];
+      bannerHeadline: string;
+      recommendationReason: string;
+    }
+
+    interface TaxBreakdown {
+      appliedTariff: TariffRate;
+      cifValueKrw: number;
+      customsDuty: number;
+      vatTaxBase: number;
+      vatAmount: number;
+      totalTax: number;
+      totalLandedCost: number;
+    }
+
+    // ============================================================================
+    // 2. Lucide CDN 아이콘 래퍼 컴포넌트
+    // ============================================================================
+    interface LucideIconProps {
+      name: string;
+      fallbackName?: string;
+      className?: string;
+    }
+
+    const LucideIcon: React.FC<LucideIconProps> = ({
+      name,
+      fallbackName,
+      className = 'w-4 h-4',
+    }) => {
+      const innerSvg = useMemo(() => {
+        const lucideGlobal = (window as any).lucide;
+        if (!lucideGlobal || !lucideGlobal.icons) return '';
+        const iconDef =
+          lucideGlobal.icons[name] ||
+          (fallbackName ? lucideGlobal.icons[fallbackName] : null);
+        if (!iconDef || typeof lucideGlobal.createElement !== 'function') return '';
+        try {
+          const svgEl = lucideGlobal.createElement(iconDef);
+          return svgEl ? svgEl.innerHTML : '';
+        } catch {
+          return '';
+        }
+      }, [name, fallbackName]);
+
+      return (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={className}
+          aria-hidden="true"
+          dangerouslySetInnerHTML={{ __html: innerSvg }}
+        />
+      );
+    };
+
+    // ============================================================================
+    // 3. 세율 코드 범례 메타데이터 (툴팁 및 하단 가이드 공용)
+    // ============================================================================
+    const CODE_LEGEND_MAP: Record<
+      string,
+      { group: 'A' | 'C' | 'F'; title: string; desc: string }
+    > = {
+      A: {
+        group: 'A',
+        title: 'A · 기본세율 (Basic Tariff)',
+        desc: '관세법 별표 관세율표에 규정된 법정 기본관세율입니다. 협정 미적용 및 양허 미대상 시 기본 적용됩니다.',
+      },
+      C: {
+        group: 'C',
+        title: 'C · WTO 일반양허세율 (WTO Concession)',
+        desc: 'WTO 협정에 따라 체약국 물품에 적용하는 양허세율입니다. 관세법 제50조에 따라 기본세율(A)보다 낮은 경우 원산지증명서 없이 우선 적용됩니다.',
+      },
+      FUS: {
+        group: 'F',
+        title: 'FUS · 한-미 FTA 협정세율',
+        desc: '대한민국-미국 자유무역협정 특혜관세율입니다. 수출자·생산자·수입자 자율발급 원산지증명서(C/O) 구비가 필요합니다.',
+      },
+      FEU: {
+        group: 'F',
+        title: 'FEU · 한-EU FTA 협정세율',
+        desc: '대한민국-유럽연합 자유무역협정 특혜관세율입니다. 6,000유로 초과 시 인증수출자 원산지신고서 문안이 필수입니다.',
+      },
+      FCN: {
+        group: 'F',
+        title: 'FCN · 한-중 FTA 협정세율',
+        desc: '대한민국-중국 자유무역협정 특혜관세율입니다. 기관발급 원산지증명서(EODES 전자교환 지원)가 필요합니다.',
+      },
+      FRC: {
+        group: 'F',
+        title: 'FRC · RCEP 협정세율',
+        desc: '역내포괄적경제동반자협정(아세안·일·중·호·뉴) 특혜세율입니다. 일본 등 양자 FTA 미체결국 수입 시 유용합니다.',
+      },
+      FVK: {
+        group: 'F',
+        title: 'FVK · 한-베트남 FTA 협정세율',
+        desc: '대한민국-베트남 자유무역협정 특혜관세율입니다. 베트남 권한기관 발급 Form KV 원산지증명서가 필요합니다.',
+      },
+      FCL: {
+        group: 'F',
+        title: 'FCL · 한-칠레 FTA 협정세율',
+        desc: '대한민국-칠레 자유무역협정 특혜관세율입니다. 지정 서식의 자율발급 원산지증명서가 필요합니다.',
+      },
+    };
+
+    // ============================================================================
+    // 4. 정교한 Mock 품목 데이터 (추천 해시태그 시나리오 완벽 포함)
+    // ============================================================================
+    const MOCK_TARIFF_ITEMS: ItemTariffInfo[] = [
+      {
+        hsCode: '0901.21.0000',
+        itemNameKo: '볶은 커피 (카페인 미제거 원두)',
+        itemNameEn: 'Roasted Coffee, Not Decaffeinated',
+        unit: 'kg',
+        tagLabel: '볶은커피',
+        category: '농림·식품',
+        originRuleSummary:
+          '세번변경기준(CC/CTH): 타 호의 생두 등을 역내에서 로스팅 가공 시 원산지 인정 가능',
+        tariffs: [
+          {
+            code: 'A',
+            name: '기본세율',
+            rate: 8.0,
+            type: 'base',
+            requiresCO: false,
+            notes: '관세법 별표 법정 기본세율 (WTO 양허세율보다 낮아 C/O 미구비 시 우선 적용)',
+          },
+          {
+            code: 'C',
+            name: 'WTO 일반양허세율',
+            rate: 54.0,
+            type: 'wto',
+            requiresCO: false,
+            notes: '양허세율(54%)이 기본세율(8%)보다 높으므로 관세법 제50조에 의거 기본세율 적용',
+          },
+          {
+            code: 'FEU',
+            name: '한-EU FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '6,000유로 초과 시 인증수출자 원산지신고서(송품장 기재) 필수',
+          },
+          {
+            code: 'FUS',
+            name: '한-미 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '수출자·생산자·수입자 자율발급 원산지증명서 및 직접운송원칙 충족 필요',
+          },
+          {
+            code: 'FVK',
+            name: '한-베트남 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '베트남 권한기관 발급 원산지증명서(Form KV) 구비 필요',
+          },
+          {
+            code: 'FCN',
+            name: '한-중 FTA',
+            rate: 8.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '양허제외 품목으로 기본세율과 동일 (절감 실익 없음)',
+          },
+          {
+            code: 'FRC',
+            name: 'RCEP 협정',
+            rate: 8.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '양허제외 품목으로 기본세율(8.0%) 유지',
+          },
+        ],
+      },
+      {
+        hsCode: '3304.99.9000',
+        itemNameKo: '마스크팩 및 기초화장품 (시트 마스크·스킨케어)',
+        itemNameEn: 'Facial Sheet Masks & Skin Care Preparations',
+        unit: '개',
+        tagLabel: '마스크팩',
+        category: '뷰티·화장품',
+        originRuleSummary:
+          '세번변경기준(CTH/CTSH) 또는 역내부가가치기준(RVC 40%~50%) 충족 필요',
+        tariffs: [
+          {
+            code: 'A',
+            name: '기본세율',
+            rate: 8.0,
+            type: 'base',
+            requiresCO: false,
+            notes: '관세법상 법정 기본세율',
+          },
+          {
+            code: 'C',
+            name: 'WTO 일반양허세율',
+            rate: 6.5,
+            type: 'wto',
+            requiresCO: false,
+            notes: '기본세율(8.0%)보다 낮아 C/O 미구비 시에도 6.5% 자동 우선 적용',
+          },
+          {
+            code: 'FEU',
+            name: '한-EU FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '프랑스·독일 등 EU산 수입 시 인증수출자 원산지신고서 구비로 즉시 무관세',
+          },
+          {
+            code: 'FUS',
+            name: '한-미 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '미국산 자율발급 원산지증명서 구비 시 0%',
+          },
+          {
+            code: 'FVK',
+            name: '한-베트남 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '기관발급 원산지증명서(Form KV) 구비 시 0%',
+          },
+          {
+            code: 'FRC',
+            name: 'RCEP 협정 (일본 등)',
+            rate: 3.3,
+            type: 'fta',
+            requiresCO: true,
+            notes: '일본산 수입 시 WTO 양허(6.5%) 대비 추가 절감 가능',
+          },
+          {
+            code: 'FCN',
+            name: '한-중 FTA',
+            rate: 5.2,
+            type: 'fta',
+            requiresCO: true,
+            notes: '단계적 인하 적용 품목으로 C/O 구비 시 기본세율 대비 2.8%p 절감',
+          },
+        ],
+      },
+      {
+        hsCode: '8507.60.0000',
+        itemNameKo: '리튬이온 배터리 (이차전지 축전지 셀·팩)',
+        itemNameEn: 'Lithium-ion Electric Accumulators (Batteries)',
+        unit: '개',
+        tagLabel: '리튬이온배터리',
+        category: '이차전지·전자',
+        originRuleSummary:
+          '4단위 세번변경기준(CTH) 또는 역내부가가치기준(RVC 40%) 충족 필요',
+        tariffs: [
+          {
+            code: 'A',
+            name: '기본세율',
+            rate: 8.0,
+            type: 'base',
+            requiresCO: false,
+            notes: '관세법상 법정 기본세율 (C/O 미구비 시 8% 부과)',
+          },
+          {
+            code: 'C',
+            name: 'WTO 일반양허세율',
+            rate: 8.0,
+            type: 'wto',
+            requiresCO: false,
+            notes: '기본세율과 동일 (8.0%)',
+          },
+          {
+            code: 'FUS',
+            name: '한-미 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '자율발급 원산지증명서 구비 및 부품 원산지 소명자료 보관 필요',
+          },
+          {
+            code: 'FEU',
+            name: '한-EU FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '인증수출자 원산지신고서 구비 시 0%',
+          },
+          {
+            code: 'FCN',
+            name: '한-중 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '기관발급 원산지증명서(한-중 EODES 전자교환 지원) 구비 시 0%',
+          },
+          {
+            code: 'FVK',
+            name: '한-베트남 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '기관발급 Form KV 원산지증명서 구비 시 0%',
+          },
+          {
+            code: 'FRC',
+            name: 'RCEP 협정 (일본 등)',
+            rate: 4.8,
+            type: 'fta',
+            requiresCO: true,
+            notes: '일본 등 양자협정 미체결국 수입 시 8.0% → 4.8% 절감 가능',
+          },
+        ],
+      },
+      {
+        hsCode: '2204.21.1000',
+        itemNameKo: '붉은 포도주 (2L 이하 용기입 와인)',
+        itemNameEn: 'Red Wine (In containers holding 2L or less)',
+        unit: '병',
+        tagLabel: '와인',
+        category: '주류·음료',
+        originRuleSummary:
+          '완전생산기준(WO) 또는 역내산 포도 양조 요건 충족 필요 (주세·교육세 별도 부과 대상)',
+        tariffs: [
+          {
+            code: 'A',
+            name: '기본세율',
+            rate: 15.0,
+            type: 'base',
+            requiresCO: false,
+            notes: '관세법상 법정 기본세율 (C/O 미구비 시 15% 부과)',
+          },
+          {
+            code: 'C',
+            name: 'WTO 일반양허세율',
+            rate: 30.0,
+            type: 'wto',
+            requiresCO: false,
+            notes: '기본세율(15%)보다 높으므로 실무상 기본세율(15%) 적용',
+          },
+          {
+            code: 'FEU',
+            name: '한-EU FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '프랑스·이탈리아·스페인산 등 인증수출자 원산지신고서 구비 시 즉시 무세',
+          },
+          {
+            code: 'FUS',
+            name: '한-미 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '미국(캘리포니아 등)산 자율발급 원산지증명서 구비 시 0%',
+          },
+          {
+            code: 'FCL',
+            name: '한-칠레 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '칠레산 자율발급 원산지증명서 및 직접운송 요건 충족 필요',
+          },
+          {
+            code: 'FRC',
+            name: 'RCEP 협정 (호주·뉴질랜드)',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '호주·뉴질랜드산 등 국가별 양허표 확인 및 원산지증명 필요',
+          },
+          {
+            code: 'FCN',
+            name: '한-중 FTA',
+            rate: 15.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '양허제외 품목 (관세 절감 실익 없음)',
+          },
+        ],
+      },
+      {
+        hsCode: '8708.40.0000',
+        itemNameKo: '자동차용 기어박스 (변속기 및 부분품)',
+        itemNameEn: 'Gear Boxes and Parts for Motor Vehicles',
+        unit: '개',
+        tagLabel: '자동차기어박스',
+        category: '자동차·부품',
+        originRuleSummary:
+          '세번변경기준(CTH) 또는 역내부가가치기준(RVC 35%~50%) 선택 충족',
+        tariffs: [
+          {
+            code: 'A',
+            name: '기본세율',
+            rate: 8.0,
+            type: 'base',
+            requiresCO: false,
+            notes: '관세법상 법정 기본세율',
+          },
+          {
+            code: 'C',
+            name: 'WTO 일반양허세율',
+            rate: 8.0,
+            type: 'wto',
+            requiresCO: false,
+            notes: '기본세율과 동일 (8.0%)',
+          },
+          {
+            code: 'FEU',
+            name: '한-EU FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '독일 등 EU산 인증수출자 원산지신고서 구비 시 0%',
+          },
+          {
+            code: 'FUS',
+            name: '한-미 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '공제법 RVC 50% 또는 집적법 RVC 35% 충족 및 자율발급 C/O 필요',
+          },
+          {
+            code: 'FVK',
+            name: '한-베트남 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '기관발급 원산지증명서(Form KV) 필수',
+          },
+          {
+            code: 'FRC',
+            name: 'RCEP 협정 (일본·아세안)',
+            rate: 3.2,
+            type: 'fta',
+            requiresCO: true,
+            notes: '연차별 단계적 인하 세율 적용 중 (기관발급 또는 인증수출자 C/O)',
+          },
+          {
+            code: 'FCN',
+            name: '한-중 FTA',
+            rate: 4.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '부분 감축 품목 (EODES 전자원산지증명 교환 대상)',
+          },
+        ],
+      },
+      {
+        hsCode: '8486.20.4000',
+        itemNameKo: '반도체 웨이퍼 노광장비 (스텝퍼·스캐너)',
+        itemNameEn: 'Semiconductor Wafer Stepper & Projection Scanner',
+        unit: '대',
+        tagLabel: '반도체노광장비',
+        category: '반도체·장비',
+        originRuleSummary:
+          'WTO 정보기술협정(ITA) 무세 양허 품목으로 원산지증명서(C/O) 없이도 0% 적용 가능',
+        tariffs: [
+          {
+            code: 'A',
+            name: '기본세율',
+            rate: 8.0,
+            type: 'base',
+            requiresCO: false,
+            notes: '법정 기본세율은 8%이나 WTO 양허세율(0%)이 우선 적용됨',
+          },
+          {
+            code: 'C',
+            name: 'WTO 일반양허세율 (ITA)',
+            rate: 0.0,
+            type: 'wto',
+            requiresCO: false,
+            notes: 'WTO 정보기술협정 무세 — C/O 구비 및 사후검증 리스크 없이 0% 통관 가능 (최적 추천)',
+          },
+          {
+            code: 'FEU',
+            name: '한-EU FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '네덜란드(ASML 등) 수입 시 WTO 양허(0%) 적용으로 통관 간소화 권장',
+          },
+          {
+            code: 'FUS',
+            name: '한-미 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '0%이나 WTO 양허세율이 이미 0%이므로 C/O 발급 불필요',
+          },
+          {
+            code: 'FRC',
+            name: 'RCEP 협정 (일본 등)',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '일본산 장비 수입 시에도 WTO 양허(0%) 적용으로 C/O 생략 가능',
+          },
+          {
+            code: 'FCN',
+            name: '한-중 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: 'WTO 양허 0% 우선 활용 권장',
+          },
+        ],
+      },
+      {
+        hsCode: '0203.29.1000',
+        itemNameKo: '냉동 삼겹살 (돼지고기)',
+        itemNameEn: 'Frozen Pork Belly (Meat of Swine)',
+        unit: 'kg',
+        tagLabel: '냉동삼겹살',
+        category: '농림·축산',
+        originRuleSummary:
+          '완전생산기준(출생·사육·도축) 또는 제0103호 생돈 역내 도축 기준 엄격 적용',
+        tariffs: [
+          {
+            code: 'A',
+            name: '기본세율',
+            rate: 25.0,
+            type: 'base',
+            requiresCO: false,
+            notes: '고세율 축산물 기본세율 (FTA 미적용 시 25% 부과)',
+          },
+          {
+            code: 'C',
+            name: 'WTO 일반양허세율',
+            rate: 25.0,
+            type: 'wto',
+            requiresCO: false,
+            notes: '기본세율과 동일 (25.0%)',
+          },
+          {
+            code: 'FEU',
+            name: '한-EU FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '스페인·네덜란드·독일산 수입 시 인증수출자 원산지신고서 필수',
+          },
+          {
+            code: 'FUS',
+            name: '한-미 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '미국산 자율발급 원산지증명서 구비 시 25% 전액 면제',
+          },
+          {
+            code: 'FCL',
+            name: '한-칠레 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '칠레산 자율발급 원산지증명서 구비 시 0%',
+          },
+          {
+            code: 'FCN',
+            name: '한-중 FTA',
+            rate: 25.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '민감품목 양허제외로 세율 인하 없음',
+          },
+          {
+            code: 'FRC',
+            name: 'RCEP 협정',
+            rate: 25.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '민감품목 양허제외',
+          },
+        ],
+      },
+      {
+        hsCode: '8479.50.2000',
+        itemNameKo: '산업용 다관절 로봇 (제조라인 자동화용)',
+        itemNameEn: 'Multi-jointed Industrial Robots',
+        unit: '대',
+        tagLabel: '산업용로봇',
+        category: '기계·로봇',
+        originRuleSummary:
+          '세번변경기준(CTSH) 또는 역내부가가치기준(RVC 40%) 충족 필요',
+        tariffs: [
+          {
+            code: 'A',
+            name: '기본세율',
+            rate: 8.0,
+            type: 'base',
+            requiresCO: false,
+            notes: '관세법상 법정 기본세율',
+          },
+          {
+            code: 'C',
+            name: 'WTO 일반양허세율',
+            rate: 8.0,
+            type: 'wto',
+            requiresCO: false,
+            notes: '기본세율과 동일 (8.0%)',
+          },
+          {
+            code: 'FEU',
+            name: '한-EU FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '독일 등 EU산 인증수출자 원산지신고서 구비 시 0%',
+          },
+          {
+            code: 'FUS',
+            name: '한-미 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '자율발급 원산지증명서 구비 시 0%',
+          },
+          {
+            code: 'FVK',
+            name: '한-베트남 FTA',
+            rate: 0.0,
+            type: 'fta',
+            requiresCO: true,
+            notes: '기관발급 원산지증명서(Form KV) 구비 시 0%',
+          },
+          {
+            code: 'FCN',
+            name: '한-중 FTA',
+            rate: 1.6,
+            type: 'fta',
+            requiresCO: true,
+            notes: '15년 균등철폐 진행 품목 (기관발급 C/O 구비 시 6.4%p 절감)',
+          },
+          {
+            code: 'FRC',
+            name: 'RCEP 협정 (일본 등)',
+            rate: 3.2,
+            type: 'fta',
+            requiresCO: true,
+            notes: '일본산 로봇 수입 시 RCEP 협정세율(3.2%) 적용으로 관세 절감 가능',
+          },
+        ],
+      },
+    ];
+
+    // ============================================================================
+    // 5. 데이터 서비스 레이어 (향후 관세청 UNI-PASS / 공공데이터포털 API 확장 호환)
+    // ============================================================================
+    function normalizeText(str: string): string {
+      return str.replace(/[.\-\s#]/g, '').trim().toLowerCase();
+    }
+
+    const tariffService = {
+      getAllItems(): ItemTariffInfo[] {
+        return MOCK_TARIFF_ITEMS;
+      },
+
+      searchItems(query: string): ItemTariffInfo[] {
+        const trimmed = query.replace(/^#+/, '').trim();
+        if (!trimmed) return MOCK_TARIFF_ITEMS;
+
+        const cleanQuery = normalizeText(trimmed);
+        const lowerQuery = trimmed.toLowerCase();
+
+        return MOCK_TARIFF_ITEMS.map((item) => {
+          const itemCleanCode = normalizeText(item.hsCode);
+          const koClean = normalizeText(item.itemNameKo);
+          const tagClean = normalizeText(item.tagLabel ?? '');
+          const enLower = item.itemNameEn.toLowerCase();
+          const catLower = (item.category ?? '').toLowerCase();
+
+          let score = 0;
+          if (cleanQuery.length > 0 && /^\d+$/.test(cleanQuery)) {
+            if (itemCleanCode === cleanQuery) score += 100;
+            else if (itemCleanCode.startsWith(cleanQuery)) score += 85;
+            else if (itemCleanCode.includes(cleanQuery)) score += 50;
+          }
+          if (tagClean === cleanQuery) score += 98;
+          else if (tagClean.includes(cleanQuery)) score += 80;
+
+          if (koClean === cleanQuery) score += 95;
+          else if (koClean.startsWith(cleanQuery)) score += 75;
+          else if (koClean.includes(cleanQuery)) score += 65;
+
+          if (enLower.includes(lowerQuery)) score += 45;
+          if (catLower.includes(lowerQuery)) score += 30;
+
+          return { item, score };
+        })
+          .filter((entry) => entry.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .map((entry) => entry.item);
+      },
+    };
+
+    // ============================================================================
+    // 6. 핵심 비즈니스 로직: 최적 추천 세율 판정 & 관세·부가세 계산
+    // ============================================================================
+    const CURRENCY_OPTIONS: CurrencyOption[] = [
+      { code: 'KRW', label: '원화 (KRW)', symbol: '₩', defaultExchangeRate: 1 },
+      { code: 'USD', label: '미국 달러 (USD)', symbol: '$', defaultExchangeRate: 1385.0 },
+      { code: 'EUR', label: '유럽 유로 (EUR)', symbol: '€', defaultExchangeRate: 1502.5 },
+      { code: 'CNY', label: '중국 위안 (CNY)', symbol: '¥', defaultExchangeRate: 192.4 },
+      { code: 'JPY', label: '일본 엔 (JPY)', symbol: '¥', defaultExchangeRate: 9.15 },
+      { code: 'VND', label: '베트남 동 (VND)', symbol: '₫', defaultExchangeRate: 0.055 },
+    ];
+
+    function formatRateDiff(diff: number): string {
+      return Number.isInteger(diff) ? `${diff}` : diff.toFixed(1);
+    }
+
+    function analyzeOptimalTariff(item: ItemTariffInfo): OptimalRateAnalysis {
+      const baseTariff =
+        item.tariffs.find((t) => t.type === 'base') ?? item.tariffs[0];
+      const wtoTariff = item.tariffs.find((t) => t.type === 'wto');
+
+      const nonFtaEffectiveTariff =
+        wtoTariff && wtoTariff.rate < baseTariff.rate ? wtoTariff : baseTariff;
+
+      const typePriority: Record<TariffRate['type'], number> = {
+        base: 0,
+        wto: 1,
+        fta: 2,
+      };
+
+      const sortedCandidates = [...item.tariffs].sort((a, b) => {
+        if (a.rate !== b.rate) return a.rate - b.rate;
+        if (a.requiresCO !== b.requiresCO) return a.requiresCO ? 1 : -1;
+        return typePriority[a.type] - typePriority[b.type];
+      });
+
+      const optimalTariff = sortedCandidates[0];
+      const minRate = optimalTariff.rate;
+      const tiedOptimalTariffs = sortedCandidates.filter(
+        (t) => Math.abs(t.rate - minRate) < 0.0001
+      );
+
+      const rateDrop = Math.max(0, baseTariff.rate - optimalTariff.rate);
+      const dropText = formatRateDiff(rateDrop);
+
+      let bannerHeadline = '';
+      let recommendationReason = '';
+
+      if (rateDrop > 0) {
+        bannerHeadline = `${optimalTariff.name} 적용 시 기본세율 대비 ${dropText}%p 절감 가능!`;
+      } else {
+        bannerHeadline = `현재 기본세율(${baseTariff.rate.toFixed(1)}%)이 최적 적용 대상입니다`;
+      }
+
+      if (!optimalTariff.requiresCO) {
+        if (optimalTariff.type === 'wto' && optimalTariff.rate < baseTariff.rate) {
+          recommendationReason = `원산지증명서(C/O) 구비 없이도 ${optimalTariff.name}(${optimalTariff.rate.toFixed(
+            1
+          )}%)이 자동 우선 적용되어 통관 리스크 없이 관세를 절감할 수 있습니다.`;
+        } else {
+          recommendationReason = `별도의 협정 원산지증명서 구비 없이 ${optimalTariff.name}(${optimalTariff.rate.toFixed(
+            1
+          )}%)로 즉시 신고 가능합니다.`;
+        }
+      } else {
+        const otherFtaCount =
+          tiedOptimalTariffs.filter((t) => t.type === 'fta').length - 1;
+        const extraText =
+          otherFtaCount > 0 ? ` (외 ${otherFtaCount}개 협정 동일 최저세율)` : '';
+        recommendationReason = `${optimalTariff.name}${extraText} 적용 시 ${optimalTariff.rate.toFixed(
+          1
+        )}% 세율 혜택을 받을 수 있습니다. 통관 전 유효한 원산지증명서(C/O)와 직접운송 증빙서류를 반드시 구비하세요.`;
+      }
+
+      return {
+        optimalTariff,
+        nonFtaEffectiveTariff,
+        baseTariff,
+        tiedOptimalTariffs,
+        bannerHeadline,
+        recommendationReason,
+      };
+    }
+
+    function calculateSingleTaxBreakdown(
+      cifValueKrw: number,
+      tariff: TariffRate
+    ): TaxBreakdown {
+      const safeCif = Math.max(0, Math.round(cifValueKrw));
+      const customsDuty = Math.floor(safeCif * (tariff.rate / 100));
+      const vatTaxBase = safeCif + customsDuty;
+      const vatAmount = Math.floor(vatTaxBase * 0.1);
+      const totalTax = customsDuty + vatAmount;
+      const totalLandedCost = safeCif + totalTax;
+
+      return {
+        appliedTariff: tariff,
+        cifValueKrw: safeCif,
+        customsDuty,
+        vatTaxBase,
+        vatAmount,
+        totalTax,
+        totalLandedCost,
+      };
+    }
+
+    function formatKrw(amount: number): string {
+      return `${Math.round(amount).toLocaleString('ko-KR')}원`;
+    }
+
+    function formatKoreanShortUnit(krw: number): string {
+      if (krw >= 100000000) {
+        const eok = krw / 100000000;
+        return `${Number.isInteger(eok) ? eok : eok.toFixed(2)}억 원`;
+      }
+      if (krw >= 10000) {
+        return `${Math.round(krw / 10000).toLocaleString('ko-KR')}만 원`;
+      }
+      return `${krw.toLocaleString('ko-KR')}원`;
+    }
+
+    // ============================================================================
+    // 7. 세율 코드 인터랙티브 툴팁 배지 컴포넌트
+    // ============================================================================
+    const CodeBadgeWithTooltip: React.FC<{ code: string }> = ({ code }) => {
+      const meta = CODE_LEGEND_MAP[code] ?? {
+        group: 'F',
+        title: `${code} · 협정세율 코드`,
+        desc: '특정 국가와의 FTA 협정에 따라 적용되는 협정관세 부호입니다.',
+      };
+
+      const badgeColor =
+        meta.group === 'A'
+          ? 'bg-slate-800 text-white border-slate-700'
+          : meta.group === 'C'
+            ? 'bg-sky-700 text-white border-sky-600'
+            : 'bg-indigo-600 text-white border-indigo-500';
+
+      return (
+        <span className="relative group inline-flex items-center">
+          <span
+            tabIndex={0}
+            className={`inline-flex items-center gap-1 font-mono text-xs font-bold px-2.5 py-1 rounded-md border shadow-sm cursor-help ${badgeColor}`}
+          >
+            {code}
+          </span>
+          <span className="pointer-events-none opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150 absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 rounded-xl bg-slate-900 text-white text-xs shadow-xl z-30 border border-slate-700">
+            <span className="block font-bold text-indigo-300 mb-1">
+              {meta.title}
+            </span>
+            <span className="block text-slate-200 leading-relaxed font-normal">
+              {meta.desc}
+            </span>
+          </span>
+        </span>
+      );
+    };
+
+    // ============================================================================
+    // 8. Header 컴포넌트
+    // ============================================================================
+    const Header: React.FC = () => (
+      <header className="bg-slate-950 text-white border-b border-slate-800 sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-emerald-500 flex items-center justify-center text-white shadow-md shrink-0">
+              <LucideIcon name="Globe" className="w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="text-base sm:text-lg font-extrabold tracking-tight text-white">
+                TariffLens - HS코드 관세 &amp; FTA 실효세율 비교기
+              </h1>
+              <p className="text-xs text-slate-400">
+                품목별 기본세율(A)·양허세율(C)·FTA 협정세율 비교 및 관세 절감 시뮬레이션
+              </p>
+            </div>
+          </div>
+
+          <div className="hidden md:flex items-center gap-2">
+            <a
+              href="#rate-code-guide"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition-colors"
+            >
+              <LucideIcon name="Info" className="w-3.5 h-3.5 text-indigo-400" />
+              <span>세율 코드 범례 (A·C·F)</span>
+            </a>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/10 text-emerald-300 border border-emerald-500/25">
+              <LucideIcon name="ShieldCheck" className="w-3.5 h-3.5" />
+              <span>관세법 제50조 기준</span>
+            </span>
+          </div>
+        </div>
+      </header>
+    );
+
+    // ============================================================================
+    // 9. Hero / Search Section (중앙 검색 바 + 추천 검색 해시태그)
+    // ============================================================================
+    interface HeroSearchSectionProps {
+      allItems: ItemTariffInfo[];
+      selectedItem: ItemTariffInfo;
+      onSelectItem: (item: ItemTariffInfo) => void;
+    }
+
+    const HeroSearchSection: React.FC<HeroSearchSectionProps> = ({
+      allItems,
+      selectedItem,
+      onSelectItem,
+    }) => {
+      const [query, setQuery] = useState<string>('');
+      const [isOpen, setIsOpen] = useState<boolean>(false);
+      const [highlightedIndex, setHighlightedIndex] = useState<number>(0);
+      const containerRef = useRef<HTMLDivElement | null>(null);
+      const inputRef = useRef<HTMLInputElement | null>(null);
+
+      const suggestions = useMemo(
+        () => tariffService.searchItems(query),
+        [query]
+      );
+
+      useEffect(() => {
+        setHighlightedIndex(0);
+      }, [query]);
+
+      useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+          if (
+            containerRef.current &&
+            !containerRef.current.contains(event.target as Node)
+          ) {
+            setIsOpen(false);
+          }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+      }, []);
+
+      const handleSelect = (item: ItemTariffInfo) => {
+        onSelectItem(item);
+        setQuery('');
+        setIsOpen(false);
+        inputRef.current?.blur();
+      };
+
+      const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (!isOpen) {
+          if (e.key === 'ArrowDown' || e.key === 'Enter') setIsOpen(true);
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setHighlightedIndex((prev) =>
+            suggestions.length > 0 ? (prev + 1) % suggestions.length : 0
+          );
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setHighlightedIndex((prev) =>
+            suggestions.length > 0
+              ? (prev - 1 + suggestions.length) % suggestions.length
+              : 0
+          );
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          if (suggestions[highlightedIndex]) {
+            handleSelect(suggestions[highlightedIndex]);
+          }
+        } else if (e.key === 'Escape') {
+          setIsOpen(false);
+        }
+      };
+
+      // 대표 추천 태그 (#볶은커피 #마스크팩 #리튬이온배터리 #와인 외 전체 시나리오)
+      const featuredTags = allItems;
+
+      return (
+        <section className="relative bg-gradient-to-b from-slate-900 via-slate-900 to-indigo-950 text-white border-b border-slate-800">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-9 sm:py-12 text-center">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-500/15 border border-indigo-400/30 text-indigo-200 text-xs font-semibold mb-3">
+              <LucideIcon name="Sparkles" className="w-3.5 h-3.5 text-indigo-300" />
+              <span>Smart Customs &amp; FTA Tariff Analyzer</span>
+            </div>
+
+            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
+              어떤 품목의 수입 관세를 조회하시겠습니까?
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-2xl mx-auto">
+              6자리·10자리 HS코드 또는 한글/영문 품목명을 입력하면 기본(A)·양허(C)·FTA(F) 최저 실효세율을 즉시 도출합니다.
+            </p>
+
+            {/* 중앙 검색 바 */}
+            <div ref={containerRef} className="relative max-w-2xl mx-auto mt-6 text-left">
+              <div className="relative flex items-center shadow-2xl rounded-2xl bg-white">
+                <div className="pl-4 sm:pl-5 pr-2 text-indigo-600 pointer-events-none flex items-center">
+                  <LucideIcon name="Search" className="w-5 h-5" />
+                </div>
+                <input
+                  id="hero-hs-search"
+                  ref={inputRef}
+                  type="text"
+                  value={query}
+                  onFocus={() => setIsOpen(true)}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setIsOpen(true);
+                  }}
+                  onKeyDown={handleKeyDown}
+                  placeholder="HS코드(예: 0901.21, 850760) 또는 품목명(볶은커피, 마스크팩, 와인) 검색..."
+                  className="w-full py-4 pr-24 bg-transparent text-sm sm:text-base text-slate-900 placeholder:text-slate-400 font-medium outline-none rounded-2xl"
+                  autoComplete="off"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuery('');
+                      inputRef.current?.focus();
+                    }}
+                    className="absolute right-20 p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                    aria-label="검색어 지우기"
+                  >
+                    <LucideIcon name="X" className="w-4 h-4" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (suggestions[highlightedIndex]) {
+                      handleSelect(suggestions[highlightedIndex]);
+                    } else {
+                      setIsOpen(true);
+                    }
+                  }}
+                  className="mr-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold transition-colors shrink-0 cursor-pointer"
+                >
+                  조회
+                </button>
+              </div>
+
+              {/* 자동완성 추천 드롭다운 */}
+              {isOpen && (
+                <div className="absolute left-0 right-0 mt-2 bg-white text-slate-900 rounded-2xl border border-slate-200 shadow-2xl z-30 overflow-hidden max-h-96 overflow-y-auto">
+                  <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                    <span className="font-medium">
+                      {query.trim()
+                        ? `'${query}' 일치 품목 (${suggestions.length}건)`
+                        : `전체 조회 가능 품목 (${suggestions.length}건)`}
+                    </span>
+                    <span className="hidden sm:inline text-slate-400">
+                      ↑↓ 선택 · Enter 이동 · Esc 닫기
+                    </span>
+                  </div>
+
+                  {suggestions.length === 0 ? (
+                    <div className="px-4 py-8 text-center">
+                      <p className="text-sm font-semibold text-slate-700">
+                        일치하는 HS코드 또는 품목이 없습니다.
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        추천 검색어: #볶은커피 #마스크팩 #리튬이온배터리 #와인 #반도체노광장비
+                      </p>
+                    </div>
+                  ) : (
+                    <ul role="listbox" className="divide-y divide-slate-100">
+                      {suggestions.map((item, idx) => {
+                        const isHighlighted = idx === highlightedIndex;
+                        const isCurrent = item.hsCode === selectedItem.hsCode;
+                        const minRate = Math.min(...item.tariffs.map((t) => t.rate));
+                        const baseRate =
+                          item.tariffs.find((t) => t.type === 'base')?.rate ?? 0;
+
+                        return (
+                          <li
+                            key={item.hsCode}
+                            role="option"
+                            aria-selected={isHighlighted}
+                            onMouseEnter={() => setHighlightedIndex(idx)}
+                            onClick={() => handleSelect(item)}
+                            className={`px-4 py-3 flex items-center justify-between gap-3 cursor-pointer transition-colors ${
+                              isHighlighted ? 'bg-indigo-50/90' : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-mono font-bold bg-slate-900 text-white">
+                                  {item.hsCode}
+                                </span>
+                                {item.category && (
+                                  <span className="px-2 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-600">
+                                    {item.category}
+                                  </span>
+                                )}
+                                {isCurrent && (
+                                  <span className="px-2 py-0.5 rounded-md text-xs font-semibold bg-indigo-100 text-indigo-700">
+                                    현재 조회 중
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-sm font-bold text-slate-900 mt-1 truncate">
+                                {item.itemNameKo}
+                              </p>
+                              <p className="text-xs text-slate-500 truncate">
+                                {item.itemNameEn}
+                              </p>
+                            </div>
+
+                            <div className="text-right shrink-0 flex items-center gap-2.5">
+                              <div>
+                                <div className="text-[11px] text-slate-400">
+                                  기본 {baseRate.toFixed(1)}% → 최저
+                                </div>
+                                <div className="text-sm font-extrabold text-emerald-600">
+                                  {minRate.toFixed(1)}%
+                                </div>
+                              </div>
+                              <LucideIcon
+                                name="ChevronRight"
+                                className="w-4 h-4 text-slate-400"
+                              />
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* 추천 검색 태그 (#볶은커피 #마스크팩 #리튬이온배터리 #와인 등) */}
+            <div className="mt-5 flex items-center justify-center gap-2 flex-wrap max-w-3xl mx-auto">
+              <span className="text-xs font-semibold text-slate-400 mr-1">
+                추천 검색 태그:
+              </span>
+              {featuredTags.map((item) => {
+                const isSelected = item.hsCode === selectedItem.hsCode;
+                const tagName = item.tagLabel ?? item.itemNameKo.split('(')[0].trim();
+                return (
+                  <button
+                    key={item.hsCode}
+                    type="button"
+                    onClick={() => handleSelect(item)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer border ${
+                      isSelected
+                        ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-md scale-105'
+                        : 'bg-white/10 text-slate-200 border-white/15 hover:bg-white/20 hover:text-white'
+                    }`}
+                  >
+                    #{tagName}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      );
+    };
+
+    // ============================================================================
+    // 10. 상단 선택 품목 메타정보 + 최적 추천 세율 요약 배너
+    // ============================================================================
+    interface ItemSummaryBannerProps {
+      item: ItemTariffInfo;
+      analysis: OptimalRateAnalysis;
+    }
+
+    const ItemSummaryBanner: React.FC<ItemSummaryBannerProps> = ({
+      item,
+      analysis,
+    }) => {
+      const {
+        optimalTariff,
+        baseTariff,
+        nonFtaEffectiveTariff,
+        bannerHeadline,
+        recommendationReason,
+      } = analysis;
+
+      return (
+        <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="grid grid-cols-1 lg:grid-cols-12">
+            {/* 좌측: 선택된 품목 메타정보 */}
+            <div className="lg:col-span-6 p-5 sm:p-6 flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-slate-100">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-slate-900 text-white">
+                    <LucideIcon name="Hash" className="w-3.5 h-3.5 text-indigo-300" />
+                    HS {item.hsCode}
+                  </span>
+                  {item.category && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                      <LucideIcon name="Package" className="w-3.5 h-3.5" />
+                      {item.category}
+                    </span>
+                  )}
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700">
+                    <LucideIcon name="Scale" className="w-3.5 h-3.5 text-slate-500" />
+                    기준 단위: <strong className="font-semibold">{item.unit}</strong>
+                  </span>
+                </div>
+
+                <h3 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-3">
+                  {item.itemNameKo}
+                </h3>
+                <p className="text-sm text-slate-500 mt-0.5">{item.itemNameEn}</p>
+              </div>
+
+              {item.originRuleSummary && (
+                <div className="mt-4 pt-3.5 border-t border-slate-100 flex items-start gap-2 text-xs text-slate-600">
+                  <LucideIcon
+                    name="Info"
+                    className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5"
+                  />
+                  <span>
+                    <strong className="text-slate-800 mr-1">원산지 결정기준:</strong>
+                    {item.originRuleSummary}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* 우측: 최적 추천 세율 요약 배너 */}
+            <div className="lg:col-span-6 p-5 sm:p-6 bg-gradient-to-br from-emerald-50 via-teal-50/50 to-white flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-emerald-600 text-white shadow-sm">
+                    <LucideIcon name="Award" className="w-3.5 h-3.5" />
+                    최적 추천 세율 요약
+                  </span>
+
+                  {optimalTariff.requiresCO ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-900 border border-amber-200">
+                      <LucideIcon name="FileCheck" className="w-3.5 h-3.5 text-amber-700" />
+                      원산지증명서(C/O) 구비 필수
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-sky-100 text-sky-900 border border-sky-200">
+                      <LucideIcon
+                        name="CircleCheck"
+                        fallbackName="CheckCircle"
+                        className="w-3.5 h-3.5 text-sky-700"
+                      />
+                      원산지증명서(C/O) 불필요
+                    </span>
+                  )}
+                </div>
+
+                {/* 핵심 헤드라인 (예: "한-EU FTA 적용 시 기본세율 대비 8%p 절감 가능!") */}
+                <p className="text-lg sm:text-xl font-extrabold text-emerald-900 mt-3.5 leading-snug">
+                  {bannerHeadline}
+                </p>
+
+                <div className="mt-2.5 flex items-center gap-3 flex-wrap text-xs sm:text-sm">
+                  <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-600 font-medium">
+                    기본세율(A): <strong className="text-slate-900">{baseTariff.rate.toFixed(1)}%</strong>
+                  </span>
+                  <LucideIcon name="ArrowRight" className="w-4 h-4 text-emerald-600" />
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold shadow-sm">
+                    최적 실효세율({optimalTariff.code}): {optimalTariff.rate.toFixed(1)}%
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    (C/O 미구비 시: {nonFtaEffectiveTariff.rate.toFixed(1)}%)
+                  </span>
+                </div>
+              </div>
+
+              <p className="mt-3.5 text-xs text-slate-700 bg-white/85 rounded-xl p-3 border border-emerald-200/70 leading-relaxed">
+                {recommendationReason}
+              </p>
+            </div>
+          </div>
+        </section>
+      );
+    };
+
+    // ============================================================================
+    // 11. 중앙: 세율 비교 테이블 (세율 종류, 코드, 세율(%), C/O 필요 여부, 절감 여부)
+    // ============================================================================
+    interface TariffComparisonTableProps {
+      item: ItemTariffInfo;
+      analysis: OptimalRateAnalysis;
+      simulatedTariff: TariffRate;
+      onSelectTariffForSimulation: (tariff: TariffRate) => void;
+    }
+
+    const TariffComparisonTable: React.FC<TariffComparisonTableProps> = ({
+      item,
+      analysis,
+      simulatedTariff,
+      onSelectTariffForSimulation,
+    }) => {
+      const [filter, setFilter] = useState<'all' | 'non-fta' | 'fta'>('all');
+      const { optimalTariff, baseTariff, tiedOptimalTariffs } = analysis;
+      const maxRate = Math.max(...item.tariffs.map((t) => t.rate), 10);
+
+      const filteredTariffs = item.tariffs.filter((t) => {
+        if (filter === 'non-fta') return t.type === 'base' || t.type === 'wto';
+        if (filter === 'fta') return t.type === 'fta';
+        return true;
+      });
+
+      const isPrimaryOptimal = (tariff: TariffRate): boolean => {
+        const isMinRate = Math.abs(tariff.rate - optimalTariff.rate) < 0.0001;
+        if (!isMinRate) return false;
+        if (!optimalTariff.requiresCO) return !tariff.requiresCO;
+        return tiedOptimalTariffs.some((t) => t.code === tariff.code);
+      };
+
+      return (
+        <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="p-5 sm:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
+                <LucideIcon
+                  name="SlidersHorizontal"
+                  className="w-5 h-5 text-indigo-600"
+                />
+                세율 비교 테이블
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                원하는 행을 클릭하면 우측 시뮬레이터에 해당 세율이 즉시 반영됩니다. 코드에 마우스를 올리면 상세 범례가 표시됩니다.
+              </p>
+            </div>
+
+            <div className="inline-flex rounded-xl bg-slate-100 p-1 self-start sm:self-auto shrink-0">
+              {[
+                { key: 'all', label: `전체 (${item.tariffs.length})` },
+                {
+                  key: 'non-fta',
+                  label: `A·C 기본/양허 (${item.tariffs.filter((t) => t.type !== 'fta').length})`,
+                },
+                {
+                  key: 'fta',
+                  label: `F 협정세율 (${item.tariffs.filter((t) => t.type === 'fta').length})`,
+                },
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setFilter(tab.key as 'all' | 'non-fta' | 'fta')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    filter === tab.key
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50/95 border-b border-slate-200 text-xs font-bold text-slate-600">
+                  <th className="py-3.5 pl-5 pr-3">세율 종류</th>
+                  <th className="py-3.5 px-3 text-center">코드</th>
+                  <th className="py-3.5 px-3">세율(%)</th>
+                  <th className="py-3.5 px-3">C/O 필요 여부</th>
+                  <th className="py-3.5 pl-3 pr-5 text-right">절감 여부</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-sm">
+                {filteredTariffs.map((tariff) => {
+                  const primaryOptimal = isPrimaryOptimal(tariff);
+                  const isSelectedForSim = simulatedTariff.code === tariff.code;
+                  const diffFromBase = baseTariff.rate - tariff.rate;
+                  const isWtoHigherThanBase =
+                    tariff.type === 'wto' && tariff.rate > baseTariff.rate;
+                  const barWidthPercent = Math.min(
+                    100,
+                    Math.max(tariff.rate > 0 ? 5 : 0, (tariff.rate / maxRate) * 100)
+                  );
+
+                  return (
+                    <tr
+                      key={tariff.code}
+                      onClick={() => onSelectTariffForSimulation(tariff)}
+                      className={`transition-colors cursor-pointer ${
+                        isSelectedForSim
+                          ? 'bg-indigo-50/75 ring-1 ring-inset ring-indigo-300'
+                          : primaryOptimal
+                            ? 'bg-emerald-50/60 hover:bg-emerald-50'
+                            : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      {/* 1. 세율 종류 */}
+                      <td className="py-4 pl-5 pr-3 align-top">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-slate-900">
+                            {tariff.name}
+                          </span>
+                          {primaryOptimal && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white">
+                              <LucideIcon name="Award" className="w-3 h-3" />
+                              최적
+                            </span>
+                          )}
+                          {isSelectedForSim && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-600 text-white">
+                              시뮬레이션 중
+                            </span>
+                          )}
+                        </div>
+                        {tariff.notes && (
+                          <p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-md">
+                            {tariff.notes}
+                          </p>
+                        )}
+                      </td>
+
+                      {/* 2. 코드 (툴팁 내장) */}
+                      <td className="py-4 px-3 align-top text-center whitespace-nowrap">
+                        <CodeBadgeWithTooltip code={tariff.code} />
+                      </td>
+
+                      {/* 3. 세율(%) */}
+                      <td className="py-4 px-3 align-top min-w-[125px]">
+                        <div className="flex items-baseline gap-1.5">
+                          <span
+                            className={`text-lg font-extrabold ${
+                              primaryOptimal
+                                ? 'text-emerald-700'
+                                : isWtoHigherThanBase
+                                  ? 'text-slate-400 line-through'
+                                  : 'text-slate-900'
+                            }`}
+                          >
+                            {tariff.rate.toFixed(1)}%
+                          </span>
+                          {tariff.rate === 0 && (
+                            <span className="text-[11px] font-bold text-emerald-700">
+                              (무세)
+                            </span>
+                          )}
+                        </div>
+                        <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden mt-2">
+                          <div
+                            className={`h-full rounded-full transition-all duration-300 ${
+                              tariff.rate === 0 || primaryOptimal
+                                ? 'bg-emerald-500'
+                                : isWtoHigherThanBase
+                                  ? 'bg-slate-300'
+                                  : diffFromBase > 0
+                                    ? 'bg-indigo-500'
+                                    : 'bg-amber-500'
+                            }`}
+                            style={{ width: `${barWidthPercent}%` }}
+                          />
+                        </div>
+                      </td>
+
+                      {/* 4. C/O 필요 여부 */}
+                      <td className="py-4 px-3 align-top whitespace-nowrap">
+                        {tariff.requiresCO ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                            <LucideIcon
+                              name="FileCheck"
+                              className="w-3.5 h-3.5 text-amber-600"
+                            />
+                            C/O 필요
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                            <LucideIcon
+                              name="CircleCheck"
+                              fallbackName="CheckCircle"
+                              className="w-3.5 h-3.5 text-slate-500"
+                            />
+                            불필요
+                          </span>
+                        )}
+                      </td>
+
+                      {/* 5. 절감 여부 */}
+                      <td className="py-4 pl-3 pr-5 align-top text-right whitespace-nowrap">
+                        {tariff.type === 'base' ? (
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-600">
+                            비교 기준 (기본)
+                          </span>
+                        ) : diffFromBase > 0 ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            <LucideIcon name="TrendingDown" className="w-3.5 h-3.5" />
+                            {formatRateDiff(diffFromBase)}%p 절감
+                          </span>
+                        ) : isWtoHigherThanBase ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                            <LucideIcon
+                              name="TriangleAlert"
+                              fallbackName="AlertTriangle"
+                              className="w-3.5 h-3.5"
+                            />
+                            기본세율 우선
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-500">
+                            절감 없음 (동일)
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      );
+    };
+
+    // ============================================================================
+    // 12. 우측/하단: 관세 시뮬레이터 패널 (수입 금액 슬라이더/인풋 -> 실시간 갱신)
+    // ============================================================================
+    interface DutySimulatorProps {
+      item: ItemTariffInfo;
+      analysis: OptimalRateAnalysis;
+      selectedTariff: TariffRate;
+      onResetToOptimal: () => void;
+    }
+
+    const DutySimulator: React.FC<DutySimulatorProps> = ({
+      item,
+      analysis,
+      selectedTariff,
+      onResetToOptimal,
+    }) => {
+      const [inputMode, setInputMode] = useState<'KRW' | 'FX'>('KRW');
+      const [cifKrw, setCifKrw] = useState<number>(50000000); // 기본 5,000만 원
+      const [fxCurrency, setFxCurrency] = useState<CurrencyCode>('USD');
+      const [fxAmount, setFxAmount] = useState<number>(50000); // 기본 $50,000
+      const [exchangeRate, setExchangeRate] = useState<number>(1385);
+      const [quantity, setQuantity] = useState<number>(1000);
+
+      const SLIDER_MIN_KRW = 1000000;   // 100만 원
+      const SLIDER_MAX_KRW = 500000000; // 5억 원
+      const SLIDER_STEP_KRW = 1000000;  // 100만 원 단위
+
+      const SLIDER_MIN_FX = 1000;
+      const SLIDER_MAX_FX = 500000;
+      const SLIDER_STEP_FX = 1000;
+
+      const handleCurrencyChange = (newCode: CurrencyCode) => {
+        setFxCurrency(newCode);
+        const found = CURRENCY_OPTIONS.find((c) => c.code === newCode);
+        if (found) setExchangeRate(found.defaultExchangeRate);
+      };
+
+      const safeQty = Math.max(1, quantity || 1);
+      const effectiveCifKrw =
+        inputMode === 'KRW'
+          ? Math.max(0, Math.round(cifKrw || 0))
+          : Math.max(0, Math.round((fxAmount || 0) * (exchangeRate || 0)));
+
+      const baseBreakdown = calculateSingleTaxBreakdown(
+        effectiveCifKrw,
+        analysis.baseTariff
+      );
+      const targetBreakdown = calculateSingleTaxBreakdown(
+        effectiveCifKrw,
+        selectedTariff
+      );
+
+      const dutySavings = baseBreakdown.customsDuty - targetBreakdown.customsDuty;
+      const totalTaxSavings = baseBreakdown.totalTax - targetBreakdown.totalTax;
+      const dutySavingsRate =
+        baseBreakdown.customsDuty > 0
+          ? (dutySavings / baseBreakdown.customsDuty) * 100
+          : 0;
+
+      const isCurrentlyOptimal =
+        Math.abs(selectedTariff.rate - analysis.optimalTariff.rate) < 0.0001 &&
+        selectedTariff.code === analysis.optimalTariff.code;
+
+      const selectedCurrencyMeta =
+        CURRENCY_OPTIONS.find((c) => c.code === fxCurrency) ?? CURRENCY_OPTIONS[1];
+
+      const krwSliderPct = Math.min(
+        100,
+        Math.max(
+          0,
+          ((Math.min(cifKrw, SLIDER_MAX_KRW) - SLIDER_MIN_KRW) /
+            (SLIDER_MAX_KRW - SLIDER_MIN_KRW)) *
+            100
+        )
+      );
+
+      const fxSliderPct = Math.min(
+        100,
+        Math.max(
+          0,
+          ((Math.min(fxAmount, SLIDER_MAX_FX) - SLIDER_MIN_FX) /
+            (SLIDER_MAX_FX - SLIDER_MIN_FX)) *
+            100
+        )
+      );
+
+      return (
+        <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="p-5 sm:p-6 border-b border-slate-100 bg-slate-900 text-white">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-base sm:text-lg font-bold flex items-center gap-2">
+                <LucideIcon name="Calculator" className="w-5 h-5 text-indigo-400" />
+                관세 시뮬레이터
+              </h3>
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-500/20 text-indigo-200 border border-indigo-400/30">
+                실시간 자동 갱신
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-1">
+              슬라이더를 조절하거나 수입 금액(CIF)을 직접 입력해보세요.
+            </p>
+          </div>
+
+          <div className="p-5 sm:p-6 space-y-5">
+            {!isCurrentlyOptimal && (
+              <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-950">
+                <span>
+                  선택 세율: <strong>{selectedTariff.name} ({selectedTariff.rate.toFixed(1)}%)</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={onResetToOptimal}
+                  className="inline-flex items-center gap-1 font-bold text-indigo-700 hover:text-indigo-900 underline cursor-pointer shrink-0"
+                >
+                  <LucideIcon name="RotateCcw" className="w-3.5 h-3.5" />
+                  최적 세율 복귀
+                </button>
+              </div>
+            )}
+
+            {/* 수입 금액(과세가격 CIF) 슬라이더 + 인풋 */}
+            <div className="bg-slate-50 rounded-xl p-4 border border-slate-200/80 space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <LucideIcon name="Coins" className="w-4 h-4 text-indigo-600" />
+                  수입 과세가격 (CIF)
+                </span>
+                <div className="inline-flex rounded-lg bg-slate-200/80 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setInputMode('KRW')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                      inputMode === 'KRW'
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    원화(KRW)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInputMode('FX')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                      inputMode === 'FX'
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    외화+환율
+                  </button>
+                </div>
+              </div>
+
+              {inputMode === 'KRW' ? (
+                <div className="space-y-3">
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xs text-slate-500">금액 직접 입력 또는 슬라이더 조절</span>
+                    <span className="text-xs font-bold text-indigo-600">
+                      약 {formatKoreanShortUnit(cifKrw)}
+                    </span>
+                  </div>
+
+                  {/* 원화 슬라이더 */}
+                  <div>
+                    <input
+                      type="range"
+                      min={SLIDER_MIN_KRW}
+                      max={SLIDER_MAX_KRW}
+                      step={SLIDER_STEP_KRW}
+                      value={Math.min(Math.max(cifKrw, SLIDER_MIN_KRW), SLIDER_MAX_KRW)}
+                      onChange={(e) => setCifKrw(Number(e.target.value))}
+                      style={{
+                        background: `linear-gradient(to right, #4f46e5 ${krwSliderPct}%, #e2e8f0 ${krwSliderPct}%)`,
+                      }}
+                      className="w-full tariff-slider cursor-pointer"
+                      aria-label="수입 금액 원화 슬라이더"
+                    />
+                    <div className="flex justify-between text-[11px] text-slate-400 mt-1">
+                      <span>100만 원</span>
+                      <span>1억 원</span>
+                      <span>3억 원</span>
+                      <span>5억 원</span>
+                    </div>
+                  </div>
+
+                  {/* 원화 인풋 */}
+                  <div className="relative">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">
+                      ₩
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1000000}
+                      value={cifKrw}
+                      onChange={(e) => setCifKrw(Math.max(0, Number(e.target.value)))}
+                      className="w-full pl-9 pr-14 py-2.5 bg-white rounded-xl border border-slate-300 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-sm font-bold text-slate-900 outline-none"
+                    />
+                    <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-500">
+                      KRW
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {/* 외화 슬라이더 */}
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-slate-500">외화 수입 금액 슬라이더</span>
+                      <span className="font-bold text-indigo-600">
+                        {selectedCurrencyMeta.symbol}
+                        {fxAmount.toLocaleString('ko-KR')} {fxCurrency}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={SLIDER_MIN_FX}
+                      max={SLIDER_MAX_FX}
+                      step={SLIDER_STEP_FX}
+                      value={Math.min(Math.max(fxAmount, SLIDER_MIN_FX), SLIDER_MAX_FX)}
+                      onChange={(e) => setFxAmount(Number(e.target.value))}
+                      style={{
+                        background: `linear-gradient(to right, #4f46e5 ${fxSliderPct}%, #e2e8f0 ${fxSliderPct}%)`,
+                      }}
+                      className="w-full tariff-slider cursor-pointer"
+                      aria-label="외화 금액 슬라이더"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-12 gap-2">
+                    <div className="col-span-4">
+                      <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                        통화
+                      </label>
+                      <select
+                        value={fxCurrency}
+                        onChange={(e) =>
+                          handleCurrencyChange(e.target.value as CurrencyCode)
+                        }
+                        className="w-full px-2.5 py-2 bg-white rounded-xl border border-slate-300 text-xs font-bold text-slate-900 outline-none"
+                      >
+                        {CURRENCY_OPTIONS.filter((c) => c.code !== 'KRW').map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {c.code} ({c.symbol})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="col-span-4">
+                      <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                        외화 금액
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={fxAmount}
+                        onChange={(e) => setFxAmount(Math.max(0, Number(e.target.value)))}
+                        className="w-full px-2.5 py-2 bg-white rounded-xl border border-slate-300 text-xs font-bold text-slate-900 outline-none"
+                      />
+                    </div>
+                    <div className="col-span-4">
+                      <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                        환율(원)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={exchangeRate}
+                        onChange={(e) =>
+                          setExchangeRate(Math.max(0, Number(e.target.value)))
+                        }
+                        className="w-full px-2.5 py-2 bg-white rounded-xl border border-slate-300 text-xs font-bold text-slate-900 outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center text-xs bg-white px-3 py-2 rounded-lg border border-slate-200">
+                    <span className="text-slate-500">원화 환산 과세가격:</span>
+                    <strong className="text-slate-900">{formatKrw(effectiveCifKrw)}</strong>
+                  </div>
+                </div>
+              )}
+
+              {/* 수입 수량 입력 */}
+              <div className="pt-3 border-t border-slate-200/80 flex items-center justify-between gap-3">
+                <label
+                  htmlFor="sim-qty"
+                  className="text-xs font-bold text-slate-700 shrink-0"
+                >
+                  수입 수량 ({item.unit})
+                </label>
+                <div className="relative w-40">
+                  <input
+                    id="sim-qty"
+                    type="number"
+                    min={1}
+                    value={quantity}
+                    onChange={(e) =>
+                      setQuantity(Math.max(1, Number(e.target.value)))
+                    }
+                    className="w-full pl-3 pr-11 py-1.5 bg-white rounded-lg border border-slate-300 text-xs font-bold text-slate-900 text-right outline-none"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-medium">
+                    {item.unit}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 핵심 결과 1: 예상 절감 세액 강조 KPI 카드 */}
+            <div className="rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white p-5 shadow-md">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-emerald-100 flex items-center gap-1.5">
+                  <LucideIcon name="TrendingDown" className="w-4 h-4" />
+                  기본세율({analysis.baseTariff.rate.toFixed(1)}%) 대비 예상 관세 절감액
+                </span>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-white/20">
+                  {dutySavingsRate.toFixed(1)}% 절감
+                </span>
+              </div>
+
+              <div className="text-2xl sm:text-3xl font-extrabold tracking-tight mt-2">
+                {dutySavings >= 0 ? '' : '-'}
+                {formatKrw(Math.abs(dutySavings))}
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-white/15 flex items-center justify-between text-xs text-emerald-100">
+                <span>부가세 포함 초기 총 세액 절감:</span>
+                <strong className="text-white font-bold">
+                  {formatKrw(totalTaxSavings)}
+                </strong>
+              </div>
+            </div>
+
+            {/* 핵심 결과 2: 총 관세액 · 부가가치세(10%) · 총 납부세액 즉시 비교 */}
+            <div className="rounded-xl border border-slate-200 overflow-hidden text-xs">
+              <div className="grid grid-cols-3 bg-slate-100 font-bold text-slate-700 py-2.5 px-3 border-b border-slate-200">
+                <div>세목 구분</div>
+                <div className="text-right">기본세율 ({analysis.baseTariff.code})</div>
+                <div className="text-right text-emerald-700">
+                  적용세율 ({selectedTariff.code})
+                </div>
+              </div>
+
+              <div className="divide-y divide-slate-100">
+                <div className="grid grid-cols-3 py-2.5 px-3 items-center">
+                  <div className="text-slate-600 font-medium">적용 관세율</div>
+                  <div className="text-right font-semibold text-slate-700">
+                    {analysis.baseTariff.rate.toFixed(1)}%
+                  </div>
+                  <div className="text-right font-extrabold text-emerald-700">
+                    {selectedTariff.rate.toFixed(1)}%
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 py-2.5 px-3 items-center bg-slate-50/50">
+                  <div className="text-slate-800 font-bold">① 총 관세액</div>
+                  <div className="text-right font-semibold text-slate-800">
+                    {formatKrw(baseBreakdown.customsDuty)}
+                  </div>
+                  <div className="text-right font-extrabold text-emerald-700">
+                    {formatKrw(targetBreakdown.customsDuty)}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 py-2.5 px-3 items-center">
+                  <div className="text-slate-600 font-medium">② 부가세 (10%)</div>
+                  <div className="text-right text-slate-700">
+                    {formatKrw(baseBreakdown.vatAmount)}
+                  </div>
+                  <div className="text-right font-semibold text-slate-900">
+                    {formatKrw(targetBreakdown.vatAmount)}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 py-3 px-3 items-center bg-emerald-50/50 font-bold">
+                  <div className="text-slate-900">총 납부세액 (①+②)</div>
+                  <div className="text-right text-slate-700">
+                    {formatKrw(baseBreakdown.totalTax)}
+                  </div>
+                  <div className="text-right text-sm font-extrabold text-emerald-700">
+                    {formatKrw(targetBreakdown.totalTax)}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 산출식 안내 */}
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3.5 text-[11px] text-slate-600 space-y-1">
+              <div className="font-semibold text-slate-800 flex items-center gap-1.5 mb-1">
+                <LucideIcon name="Receipt" className="w-3.5 h-3.5 text-indigo-600" />
+                수량 {safeQty.toLocaleString('ko-KR')}{item.unit} 기준 산출식
+              </div>
+              <div className="font-mono text-slate-700">
+                • 관세액 = 과세가격({formatKrw(effectiveCifKrw)}) × {selectedTariff.rate.toFixed(1)}%
+              </div>
+              <div className="font-mono text-slate-700">
+                • 부가세 = (과세가격 + 실효관세) × 10% = {formatKrw(targetBreakdown.vatAmount)}
+              </div>
+            </div>
+          </div>
+        </section>
+      );
+    };
+
+    // ============================================================================
+    // 13. Footer / Guide: A(기본), C(양허), F(협정) 세율 코드 범례 및 법적 고지 문구
+    // ============================================================================
+    const FooterGuide: React.FC = () => {
+      const legendCards = [
+        {
+          symbol: 'A',
+          badgeClass: 'bg-slate-800 text-white',
+          title: '기본세율 (Basic Rate)',
+          subtitle: '관세법 별표 법정 세율',
+          desc: '대한민국 관세법 별표 관세율표에 규정된 기본 법정관세율입니다. 협정세율이나 낮은 양허세율이 없는 경우 기본 적용되며 원산지증명서(C/O)가 필요하지 않습니다.',
+        },
+        {
+          symbol: 'C',
+          badgeClass: 'bg-sky-700 text-white',
+          title: '양허세율 (WTO Concession)',
+          subtitle: 'WTO 일반양허 관세율',
+          desc: 'WTO 협정에 따라 회원국 물품에 부여하는 양허세율입니다. 관세법 제50조에 의거 기본세율(A)보다 세율이 낮은 경우에만 우선 적용되며, C/O 없이 혜택을 받을 수 있습니다.',
+        },
+        {
+          symbol: 'F',
+          badgeClass: 'bg-indigo-600 text-white',
+          title: 'FTA 협정세율 (Preferential Rate)',
+          subtitle: 'FUS · FEU · FCN · FRC · FVK · FCL 등',
+          desc: '자유무역협정(FTA) 체결국 원산지 물품에 적용되는 특혜세율입니다. 원산지 결정기준 충족, 유효한 원산지증명서(C/O) 구비 및 직접운송원칙 충족이 필수입니다.',
+        },
+      ];
+
+      return (
+        <footer
+          id="rate-code-guide"
+          className="bg-white border-t border-slate-200 mt-10"
+        >
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-6">
+            <div>
+              <h4 className="text-sm sm:text-base font-extrabold text-slate-900 flex items-center gap-2">
+                <LucideIcon name="BookOpen" className="w-4 h-4 text-indigo-600" />
+                관세율 구분 코드 범례 가이드 (A · C · F)
+              </h4>
+              <p className="text-xs text-slate-500 mt-0.5">
+                테이블 내 각 세율 코드 배지에 마우스를 올리면 세부 협정별 원산지증명 방식을 툴팁으로도 확인할 수 있습니다.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {legendCards.map((card) => (
+                <div
+                  key={card.symbol}
+                  className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 hover:border-indigo-200 transition-colors"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span
+                      className={`w-8 h-8 rounded-lg font-mono text-sm font-extrabold flex items-center justify-center shrink-0 ${card.badgeClass}`}
+                    >
+                      {card.symbol}
+                    </span>
+                    <div>
+                      <div className="text-sm font-bold text-slate-900">
+                        {card.title}
+                      </div>
+                      <div className="text-[11px] font-medium text-indigo-600">
+                        {card.subtitle}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-3 leading-relaxed">
+                    {card.desc}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* 법적 고지 문구 */}
+            <div className="rounded-xl bg-amber-50/80 border border-amber-200/80 px-4 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-950">
+              <div className="flex items-center gap-2 font-semibold">
+                <LucideIcon
+                  name="ShieldAlert"
+                  className="w-4 h-4 text-amber-600 shrink-0"
+                />
+                <span>
+                  본 계산 결과는 모의 계산용이며 실제 통관 시 세관 신고 기준에 따릅니다.
+                </span>
+              </div>
+              <span className="text-[11px] text-amber-800/80">
+                TariffLens · Customs &amp; FTA Effective Rate Simulator
+              </span>
+            </div>
+          </div>
+        </footer>
+      );
+    };
+
+    // ============================================================================
+    // 14. 루트 앱 컴포넌트
+    // ============================================================================
+    const App: React.FC = () => {
+      const items = useMemo(() => tariffService.getAllItems(), []);
+      const [selectedItem, setSelectedItem] = useState<ItemTariffInfo>(items[0]);
+      const [customSimulatedTariff, setCustomSimulatedTariff] =
+        useState<TariffRate | null>(null);
+
+      const analysis = useMemo(
+        () => analyzeOptimalTariff(selectedItem),
+        [selectedItem]
+      );
+
+      const activeSimulatedTariff =
+        customSimulatedTariff ?? analysis.optimalTariff;
+
+      const handleSelectItem = (item: ItemTariffInfo) => {
+        setSelectedItem(item);
+        setCustomSimulatedTariff(null);
+      };
+
+      return (
+        <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+          {/* Header */}
+          <Header />
+
+          {/* Hero / Search Section */}
+          <HeroSearchSection
+            allItems={items}
+            selectedItem={selectedItem}
+            onSelectItem={handleSelectItem}
+          />
+
+          {/* Main Content */}
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
+            {/* 상단: 선택된 품목 메타정보 + 최적 추천 세율 요약 배너 */}
+            <ItemSummaryBanner item={selectedItem} analysis={analysis} />
+
+            {/* 중앙(세율 비교 테이블) + 우측/하단(관세 시뮬레이터 패널) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              <div className="lg:col-span-7 xl:col-span-8">
+                <TariffComparisonTable
+                  item={selectedItem}
+                  analysis={analysis}
+                  simulatedTariff={activeSimulatedTariff}
+                  onSelectTariffForSimulation={(tariff) =>
+                    setCustomSimulatedTariff(tariff)
+                  }
+                />
+              </div>
+
+              <div className="lg:col-span-5 xl:col-span-4 lg:sticky lg:top-20">
+                <DutySimulator
+                  item={selectedItem}
+                  analysis={analysis}
+                  selectedTariff={activeSimulatedTariff}
+                  onResetToOptimal={() => setCustomSimulatedTariff(null)}
+                />
+              </div>
+            </div>
+          </main>
+
+          {/* Footer / Guide */}
+          <FooterGuide />
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
+    root.render(<App />);
+  </script>
+
+  <script>
+    (function () {
+      try {
+        const tsxSource = document.getElementById('app-tsx').textContent;
+        const compiledCode = Babel.transform(tsxSource, {
+          filename: 'app.tsx',
+          presets: ['typescript', ['react', { runtime: 'classic' }]],
+        }).code;
+        new Function(compiledCode)();
+      } catch (err) {
+        console.error('앱 초기화 오류:', err);
+        document.getElementById('root').innerHTML =
+          '<div style="padding:24px;color:#b91c1c;font-family:sans-serif;">' +
+          '<h2>화면 렌더링 중 오류가 발생했습니다.</h2><pre>' +
+          String(err && err.stack ? err.stack : err) +
+          '</pre></div>';
+      }
+    })();
+  </script>
+</body>
+</html>
